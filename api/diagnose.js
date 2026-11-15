@@ -75,7 +75,7 @@ module.exports = async (req, res) => {
   if (req.method === "GET" && req.query.test) {
     if (req.query.test === "all") {
       const list = [[MODEL, true], [MODEL, false], ["gemini-3.7-flash", false], ["gemini-2.5-flash", false]];
-      return res.status(200).json(await Promise.all(list.map(([m, th]) => probe(key, m, th, 20000))));
+      return res.status(200).json(await Promise.all(list.map(([m, th]) => probe(key, m, th, 55000))));
     }
     const m = String(req.query.model || MODEL);
     if (!/^gemini-[a-z0-9.\-]{1,40}$/.test(m)) return res.status(400).json({ error: "モデル名が正しくありません。" });
