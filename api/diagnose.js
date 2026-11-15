@@ -1,7 +1,7 @@
 // 診断の実行。ブラウザで圧縮済みの動画（3.5MB以下）を受け取り、そのままGeminiに渡します。
 // APIキー（GEMINI_API_KEY）とプロンプトはサーバー側だけにあります。
 const BASE = "https://generativelanguage.googleapis.com";
-const MODEL = "gemini-3.8-flash";
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash"; // 切り分け用に、環境変数 GEMINI_MODEL で差し替え可能
 const MAX_BYTES = 4.2 * 1024 * 1024; // Vercelの本文上限（4.5MB）より少し小さく
 const ALLOWED_MIME = ["video/mp4", "video/webm"];
 
@@ -59,7 +59,7 @@ module.exports = async (req, res) => {
     if (!buf.length) return res.status(400).json({ error: "動画データが空です。" });
     if (buf.length > MAX_BYTES) return res.status(413).json({ error: "動画のサイズが大きすぎます。もう一度圧縮してください。" });
 
-    console.log("diagnose: received " + buf.length + " bytes, " + (Date.now() - t0) + "ms");
+    console.log("diagnose: received " + buf.length + " bytes, mime=" + mime + ", model=" + MODEL + ", " + (Date.now() - t0) + "ms");
     const r = await fetch(BASE + "/v1beta/models/" + MODEL + ":generateContent", {
       method: "POST",
       signal: ac.signal,
