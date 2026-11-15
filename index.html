@@ -156,7 +156,7 @@ footer{background:#1C2126;color:#AEB7BD;padding:32px 0;font-size:14px}
       <div>
         <label for="videoFile">運転動画</label>
         <input id="videoFile" type="file" accept="video/*">
-        <p class="hint">動画はあなたのブラウザの中で自動的に小さく圧縮（3.5MB以下・音声なし・最大60秒分）されてから送られます。圧縮には動画の長さと同じくらいの時間がかかり、その間はこのタブを開いたままにしてください。長い動画は最初の60秒だけを診断します。他人の顔やナンバーが映る動画の扱いにはご注意ください。</p>
+        <p class="hint">動画はあなたのブラウザの中で自動的に小さく圧縮（3.5MB以下・音声なし・最大40秒分）されてから送られます。圧縮には動画の長さと同じくらいの時間がかかり、その間はこのタブを開いたままにしてください。長い動画は最初の40秒だけを診断します。他人の顔やナンバーが映る動画の扱いにはご注意ください。</p>
       </div>
       <video id="preview" controls playsinline></video>
       <div>
@@ -183,7 +183,7 @@ footer{background:#1C2126;color:#AEB7BD;padding:32px 0;font-size:14px}
   const statusEl = $("status"), resultEl = $("result"), preview = $("preview"), bar = $("bar");
 
   const TARGET = 3.5 * 1024 * 1024; // 送信する動画の上限（3.5MB）
-  const MAX_SEC = 60;               // 診断に使う最大の長さ（秒）
+  const MAX_SEC = 40;               // 診断に使う最大の長さ（秒）
 
   fileEl.addEventListener("change", () => {
     const f = fileEl.files[0];
@@ -203,7 +203,8 @@ footer{background:#1C2126;color:#AEB7BD;padding:32px 0;font-size:14px}
 
   // ---------- 動画の圧縮（Canvas + MediaRecorder） ----------
   function pickMime() {
-    const list = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"];
+    // mp4を優先（webmは再生時間の情報がなく、AI側で処理に時間がかかることがあるため）
+    const list = ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"];
     return list.find((t) => MediaRecorder.isTypeSupported(t)) || "";
   }
 
@@ -300,7 +301,14 @@ footer{background:#1C2126;color:#AEB7BD;padding:32px 0;font-size:14px}
 
   // ---------- サーバー（Vercel Functions）の呼び出し ----------
   async function api(url, opts) {
-    const res = await fetch(url, opts);
+    let res;
+    try {
+      res = await fetch(url, opts);
+    } catch (e) {
+      throw new Error(location.protocol === "file:"
+        ? "このページをファイルとして直接開いているため、サーバーに接続できません。Vercelの公開URL（https://…vercel.app）から開いてください。"
+        : "サーバーに接続できませんでした。通信状況や、広告ブロックなどの拡張機能を確認し、ページを再読み込みしてもう一度お試しください。");
+    }
     let data = {};
     try { data = await res.json(); } catch (e) {}
     if (!res.ok) throw new Error(data.error || "サーバーエラー（" + res.status + "）");
