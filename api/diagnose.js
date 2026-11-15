@@ -20,6 +20,34 @@ function buildPrompt(memo) {
   ].filter(Boolean).join("\n");
 }
 
+// 切り分け用：動画なしの短い質問で、モデルの応答時間を測る
+async function probe(key, model, think, ms) {
+  const cfg = { maxOutputTokens: 200 };
+  if (think) cfg.thinkingConfig = { thinkingLevel: "low" };
+  const thinking = think ? "low" : "指定なし";
+  const t = Date.now();
+  const ac = new AbortController();
+  const tm = setTimeout(() => ac.abort(), ms);
+  try {
+    const r = await fetch(BASE + "/v1beta/models/" + model + ":generateContent", {
+      method: "POST",
+      signal: ac.signal,
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "「OK」とだけ返してください。" }] }], generationConfig: cfg })
+    });
+    const d = await r.json().catch(() => ({}));
+    return {
+      model, thinking, status: r.status, ms: Date.now() - t,
+      text: (d.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join(""),
+      error: d.error?.message || null
+    };
+  } catch (e) {
+    return { model, thinking, ms: Date.now() - t, error: e.name === "AbortError" ? (ms / 1000) + "秒待っても応答がありませんでした。" : String(e.message) };
+  } finally {
+    clearTimeout(tm);
+  }
+}
+
 // 本文（動画データ）をストリームから読む。ms 以内に終わらなければ失敗にする
 function readBody(req, ms) {
   return new Promise((resolve, reject) => {
@@ -41,34 +69,17 @@ module.exports = async (req, res) => {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return res.status(500).json({ error: "サーバーに GEMINI_API_KEY が設定されていません。" });
 
-  // 切り分け用：/api/diagnose?test=1 を開くと、動画なしの短い質問でモデルの応答時間を測る
-  //   ?model=gemini-2.5-flash で別モデルを試せる／&nothink=1 で思考の設定を外して試せる
+  // 切り分け用：
+  //   /api/diagnose?test=all …… 複数のモデル・設定を同時に試して、結果を一覧で返す
+  //   /api/diagnose?test=1&model=gemini-2.5-flash&nothink=1 …… 1つだけ試す
   if (req.method === "GET" && req.query.test) {
+    if (req.query.test === "all") {
+      const list = [[MODEL, true], [MODEL, false], ["gemini-3.7-flash", false], ["gemini-2.5-flash", false]];
+      return res.status(200).json(await Promise.all(list.map(([m, th]) => probe(key, m, th, 20000))));
+    }
     const m = String(req.query.model || MODEL);
     if (!/^gemini-[a-z0-9.\-]{1,40}$/.test(m)) return res.status(400).json({ error: "モデル名が正しくありません。" });
-    const cfg = { maxOutputTokens: 200 };
-    if (!req.query.nothink) cfg.thinkingConfig = { thinkingLevel: "low" };
-    const t = Date.now();
-    const ac2 = new AbortController();
-    const tm = setTimeout(() => ac2.abort(), 25000);
-    try {
-      const r = await fetch(BASE + "/v1beta/models/" + m + ":generateContent", {
-        method: "POST",
-        signal: ac2.signal,
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "「OK」とだけ返してください。" }] }], generationConfig: cfg })
-      });
-      const d = await r.json().catch(() => ({}));
-      return res.status(200).json({
-        model: m, status: r.status, ms: Date.now() - t,
-        text: (d.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join(""),
-        error: d.error?.message || null
-      });
-    } catch (e) {
-      return res.status(200).json({ model: m, ms: Date.now() - t, error: e.name === "AbortError" ? "25秒待っても応答がありませんでした。" : String(e.message) });
-    } finally {
-      clearTimeout(tm);
-    }
+    return res.status(200).json(await probe(key, m, !req.query.nothink, 25000));
   }
 
   if (req.method !== "POST") return res.status(405).json({ error: "POSTで呼び出してください。" });
