@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ゆとりドライブ｜運転のコツと動画AI診断</title>
+<meta name="description" content="車間距離・カーブ・駐車のコツを解説。運転動画をAIに診断してもらえます。">
+<style>
+:root{
+  --asphalt:#252B31; --asphalt-2:#323A42; --paint:#F3F5F6; --sign:#0E6F61; --amber:#FFB81C; --ink:#171C20; --muted:#5B6670; --line:#D5DADE;
+  --font:"Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic","Meiryo",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font-family:var(--font);color:var(--ink);background:var(--paint);line-height:1.8;font-size:17px}
+a{color:inherit}
+:focus-visible{outline:3px solid var(--amber);outline-offset:3px}
+.wrap{max-width:1020px;margin:0 auto;padding:0 24px}
+
+/* ヒーロー */
+header.hero{background:var(--asphalt);color:var(--paint);padding:28px 0 0;position:relative;overflow:hidden}
+.nav{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+.brand{font-weight:800;letter-spacing:.04em;font-size:18px}
+.nav a{margin-left:20px;text-decoration:none;font-size:15px;opacity:.85}
+.nav a:hover{opacity:1;text-decoration:underline}
+.hero h1{font-size:clamp(44px,9vw,96px);line-height:1.1;margin:72px 0 20px;font-weight:900;letter-spacing:.02em}
+.hero p.lead{font-size:clamp(18px,2.6vw,24px);max-width:30em;margin:0 0 40px;color:#DDE2E5}
+.cta{display:inline-block;background:var(--amber);color:var(--ink);font-weight:800;text-decoration:none;padding:14px 28px;border-radius:6px}
+.cta:hover{background:#FFC94D}
+.lane{height:70px;margin-top:64px;position:relative;border-top:4px solid var(--paint)}
+.lane::before{content:"";position:absolute;left:0;right:0;top:28px;height:6px;
+  background:repeating-linear-gradient(90deg,var(--amber) 0 56px,transparent 56px 112px);
+  animation:run 1.6s linear infinite}
+@keyframes run{to{background-position:-112px 0}}
+@media (prefers-reduced-motion:reduce){.lane::before{animation:none}html{scroll-behavior:auto}}
+
+/* コツ */
+section{padding:84px 0}
+h2{font-size:clamp(28px,4.5vw,40px);margin:0 0 12px;line-height:1.3}
+.sub{color:var(--muted);margin:0 0 48px;max-width:36em}
+.tip{display:grid;grid-template-columns:200px 1fr;gap:40px;padding:40px 0;border-top:1px solid var(--line)}
+.sign{background:var(--sign);color:#fff;border:5px solid #fff;outline:3px solid var(--sign);border-radius:14px;
+  height:160px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:10px;align-self:start}
+.sign b{font-size:30px;line-height:1.25;font-weight:900}
+.sign span{font-size:13px;margin-top:6px;opacity:.9}
+.tip h3{font-size:26px;margin:0 0 8px}
+.tip p{margin:0 0 12px;max-width:38em}
+.tip ul{margin:0;padding-left:1.2em;max-width:38em}
+.tip li{margin-bottom:6px}
+.note{background:#fff;border-left:6px solid var(--amber);padding:12px 16px;margin-top:16px;max-width:38em;font-size:15px}
+
+/* 診断 */
+#diagnosis{background:var(--asphalt);color:var(--paint)}
+#diagnosis .sub{color:#C3CBD1}
+.panel{background:var(--asphalt-2);border-radius:10px;padding:28px;display:grid;gap:22px}
+label{display:block;font-weight:700;margin-bottom:6px}
+.hint{font-size:14px;color:#C3CBD1;margin:6px 0 0;line-height:1.6}
+input[type=password],input[type=text],textarea,input[type=file]{width:100%;padding:12px 14px;border-radius:6px;border:2px solid #56626C;background:#1C2126;color:var(--paint);font:inherit}
+input[type=file]{padding:10px}
+textarea{min-height:84px;resize:vertical}
+video{width:100%;max-height:360px;background:#000;border-radius:6px;display:none}
+button.go{background:var(--amber);color:var(--ink);border:0;border-radius:6px;font:inherit;font-weight:800;padding:14px 28px;cursor:pointer;justify-self:start}
+button.go:hover:not(:disabled){background:#FFC94D}
+button.go:disabled{opacity:.55;cursor:not-allowed}
+#status{min-height:1.6em;font-weight:700}
+#status.err{color:#FF9C8F}
+#result{background:var(--paint);color:var(--ink);border-radius:8px;padding:24px 28px;display:none}
+#result h4{font-size:20px;margin:22px 0 6px;border-bottom:3px solid var(--amber);padding-bottom:4px}
+#result h4:first-child{margin-top:0}
+#result p{margin:0 0 10px}
+#result ul{margin:0 0 10px;padding-left:1.3em}
+
+footer{background:#1C2126;color:#AEB7BD;padding:32px 0;font-size:14px}
+
+@media (max-width:720px){
+  body{font-size:16px}
+  .tip{grid-template-columns:1fr;gap:20px}
+  .sign{height:auto;min-height:110px}
+  .nav a{margin-left:14px}
+  section{padding:60px 0}
+}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <nav class="nav" aria-label="ページ内メニュー">
+      <div class="brand">ゆとりドライブ</div>
+      <div><a href="#tips">運転のコツ</a><a href="#diagnosis">動画で診断</a></div>
+    </nav>
+    <h1>ゆとりドライブ</h1>
+    <p class="lead">速く走るより、慌てない。安全運転は「余白」のつくり方で決まります。</p>
+    <a class="cta" href="#tips">コツを読む</a>
+    <div class="lane" aria-hidden="true"></div>
+  </div>
+</header>
+
+<main>
+<section id="tips">
+  <div class="wrap">
+    <h2>まず押さえたい、運転の3つのコツ</h2>
+    <p class="sub">どれも「先を見て、早めに準備する」ことが土台です。通勤や買い物の運転で、今日から試せます。</p>
+
+    <article class="tip">
+      <div class="sign" aria-hidden="true"><b>2秒以上</b><span>前の車との間隔</span></div>
+      <div>
+        <h3>車間距離：時間で測る</h3>
+        <p>前の車が電柱や標識を通過してから、自分の車が同じ場所に着くまで「2秒」以上あけるのが目安です。数字より時間で考えると、速度が変わっても使えます。</p>
+        <ul>
+          <li>雨・夜・雪道では3〜4秒以上に広げる（止まるまでの距離が伸びるため）</li>
+          <li>前の車だけでなく、その2〜3台先のブレーキランプも見る</li>
+          <li>後ろから詰められても、あおりに合わせず自分の間隔を守る</li>
+        </ul>
+        <div class="note">割り込まれて間隔が縮んだら、アクセルを緩めて静かに2秒を取り戻します。</div>
+      </div>
+    </article>
+
+    <article class="tip">
+      <div class="sign" aria-hidden="true"><b>入る前に減速</b><span>カーブの走り方</span></div>
+      <div>
+        <h3>カーブ：曲がる前に速度を決める</h3>
+        <p>ブレーキはカーブの手前で済ませ、曲がっている最中は一定の速度を保ちます。途中で強く踏むと、車の姿勢が乱れて同乗者も酔いやすくなります。</p>
+        <ul>
+          <li>視線は車の鼻先ではなく、カーブの出口に向ける</li>
+          <li>ハンドルは小さく滑らかに。急に切らない、急に戻さない</li>
+          <li>出口が見えたら、アクセルをじんわり戻して加速する</li>
+        </ul>
+        <div class="note">見通しの悪いカーブは、対向車がはみ出してくる前提で、少し左寄りを意識します。</div>
+      </div>
+    </article>
+
+    <article class="tip">
+      <div class="sign" aria-hidden="true"><b>ゆっくり確認</b><span>駐車のコツ</span></div>
+      <div>
+        <h3>駐車：スピードを落として、目で確かめる</h3>
+        <p>駐車で失敗する一番の原因は、速すぎることです。アクセルを踏まずにブレーキを少し緩めるだけの速さ（クリープ）で動かすと、修正する余裕が生まれます。</p>
+        <ul>
+          <li>バックする前に車の周囲を歩いて確認する、または目視で必ず確認する</li>
+          <li>ミラーは「枠線と車体の平行」を見る。ずれたら迷わず前に出て切り返す</li>
+          <li>ハンドルは止まったまま回し続けず、少し動きながら切る（タイヤと路面の負担も減る）</li>
+        </ul>
+        <div class="note">切り返しは恥ずかしいことではありません。確実に停める人が、いちばん上手な人です。</div>
+      </div>
+    </article>
+  </div>
+</section>
+
+<section id="diagnosis">
+  <div class="wrap">
+    <h2>運転動画をAIで診断する</h2>
+    <p class="sub">ドライブレコーダーなどの動画をアップロードすると、GeminiのAIが改善点を日本語でまとめます。</p>
+
+    <div class="panel">
+      <div>
+        <label for="videoFile">運転動画</label>
+        <input id="videoFile" type="file" accept="video/*">
+        <p class="hint">100MBまでの動画を選べます。数分以内の動画がおすすめです。動画は診断のためにGoogleのGeminiに送られ、一定時間後に自動で削除されます。他人の顔やナンバーが映る動画の扱いにはご注意ください。</p>
+      </div>
+      <video id="preview" controls playsinline></video>
+      <div>
+        <label for="memo">補足（任意）</label>
+        <textarea id="memo" placeholder="例：初心者です／狭い道が苦手／右折時の動きを見てほしい"></textarea>
+      </div>
+      <button class="go" id="runBtn" type="button">診断する</button>
+      <div id="status" role="status" aria-live="polite"></div>
+      <div id="result" aria-live="polite"></div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">AIの診断は動画から読み取れる範囲の参考情報です。実際の運転の指導は、教習所や運転指導員にご相談ください。</div>
+</footer>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const fileEl = $("videoFile"), memoEl = $("memo"), btn = $("runBtn");
+  const statusEl = $("status"), resultEl = $("result"), preview = $("preview");
+  const MAX_MB = 100;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  fileEl.addEventListener("change", () => {
+    const f = fileEl.files[0];
+    if (!f) { preview.style.display = "none"; return; }
+    preview.src = URL.createObjectURL(f);
+    preview.style.display = "block";
+  });
+
+  function setStatus(msg, isErr) {
+    statusEl.textContent = msg;
+    statusEl.className = isErr ? "err" : "";
+  }
+
+  // サーバー（Vercel Functions）を呼び出す
+  async function api(url, opts) {
+    const res = await fetch(url, opts);
+    let data = {};
+    try { data = await res.json(); } catch (e) {}
+    if (!res.ok) throw new Error(data.error || "サーバーエラー（" + res.status + "）");
+    return data;
+  }
+
+  // 動画を小さな塊に分けてアップロードし、Geminiの処理完了まで待つ
+  async function uploadVideo(file, mime) {
+    const s = await api("/api/upload?action=start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: file.name, size: file.size, mime: mime })
+    });
+    const unit = Math.floor(3900000 / s.granularity) * s.granularity; // 関数の本文上限（4.5MB）以下
+    if (unit <= 0) throw new Error("この環境ではアップロード方式が使えません。");
+
+    let offset = 0, info = null;
+    while (offset < file.size) {
+      const end = Math.min(offset + unit, file.size);
+      const final = end >= file.size;
+      setStatus("動画をアップロードしています… " + Math.round((end / file.size) * 100) + "%");
+      const r = await api("/api/upload?action=chunk", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "x-upload-url": encodeURIComponent(s.uploadUrl),
+          "x-offset": String(offset),
+          "x-final": final ? "1" : "0"
+        },
+        body: file.slice(offset, end)
+      });
+      if (final) info = r.file;
+      offset = end;
+    }
+
+    setStatus("Geminiが動画を処理しています…");
+    for (let i = 0; i < 40 && info.state === "PROCESSING"; i++) {
+      await sleep(3000);
+      info = await api("/api/upload?action=status&name=" + encodeURIComponent(info.name));
+    }
+    if (info.state !== "ACTIVE") throw new Error("動画の処理が完了しませんでした。短い動画でお試しください。");
+    return info;
+  }
+
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+  // 見出し・箇条書き・太字を簡易的に整形して表示
+  function render(text) {
+    const out = []; let inList = false;
+    const closeList = () => { if (inList) { out.push("</ul>"); inList = false; } };
+    text.split("\n").forEach((raw) => {
+      const line = raw.trim();
+      if (!line) { closeList(); return; }
+      let m;
+      if ((m = line.match(/^#{1,4}\s*(.+)$/))) { closeList(); out.push("<h4>" + inline(m[1]) + "</h4>"); }
+      else if ((m = line.match(/^[*\-・]\s+(.+)$/))) { if (!inList) { out.push("<ul>"); inList = true; } out.push("<li>" + inline(m[1]) + "</li>"); }
+      else { closeList(); out.push("<p>" + inline(line) + "</p>"); }
+    });
+    closeList();
+    resultEl.innerHTML = out.join("");
+    resultEl.style.display = "block";
+  }
+
+  btn.addEventListener("click", async () => {
+    const file = fileEl.files[0];
+    resultEl.style.display = "none";
+    if (!file) { setStatus("診断する動画を選んでください。", true); fileEl.focus(); return; }
+    if (file.size > MAX_MB * 1024 * 1024) { setStatus("動画は" + MAX_MB + "MB以下にしてください。", true); return; }
+
+    btn.disabled = true;
+    try {
+      const mime = file.type || "video/mp4";
+      const info = await uploadVideo(file, mime);
+      setStatus("AIが運転を診断しています。最大1分ほどかかります…");
+      const data = await api("/api/diagnose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileUri: info.uri, mime: info.mimeType || mime, memo: memoEl.value.trim() })
+      });
+      render(data.text);
+      setStatus("診断が完了しました。");
+    } catch (e) {
+      setStatus(e.message || "エラーが発生しました。", true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>
