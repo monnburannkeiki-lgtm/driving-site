@@ -1,7 +1,7 @@
 // 診断の実行。ブラウザで圧縮済みの動画（3.5MB以下）を受け取り、そのままGeminiに渡します。
 // APIキー（GEMINI_API_KEY）とプロンプトはサーバー側だけにあります。
 const BASE = "https://generativelanguage.googleapis.com";
-const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash"; // 切り分け用に、環境変数 GEMINI_MODEL で差し替え可能
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash"; // 環境変数 GEMINI_MODEL でいつでも変更可能
 const MAX_BYTES = 4.2 * 1024 * 1024; // Vercelの本文上限（4.5MB）より少し小さく
 const ALLOWED_MIME = ["video/mp4", "video/webm"];
 
@@ -21,10 +21,11 @@ function buildPrompt(memo) {
 }
 
 // 切り分け用：動画なしの短い質問で、モデルの応答時間を測る
-async function probe(key, model, think, ms) {
+async function probe(key, model, thinkMode, ms) {
   const cfg = { maxOutputTokens: 200 };
-  if (think) cfg.thinkingConfig = { thinkingLevel: "low" };
-  const thinking = think ? "low" : "指定なし";
+  if (thinkMode === "low") cfg.thinkingConfig = { thinkingLevel: "LOW" };
+  if (thinkMode === "zero") cfg.thinkingConfig = { thinkingBudget: 0 };
+  const thinking = thinkMode || "指定なし";
   const t = Date.now();
   const ac = new AbortController();
   const tm = setTimeout(() => ac.abort(), ms);
@@ -33,7 +34,10 @@ async function probe(key, model, think, ms) {
       method: "POST",
       signal: ac.signal,
       headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "「OK」とだけ返してください。" }] }], generationConfig: cfg })
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: "「OK」とだけ返してください。" }] }],
+        generationConfig: cfg
+      })
     });
     const d = await r.json().catch(() => ({}));
     return {
@@ -42,7 +46,10 @@ async function probe(key, model, think, ms) {
       error: d.error?.message || null
     };
   } catch (e) {
-    return { model, thinking, ms: Date.now() - t, error: e.name === "AbortError" ? (ms / 1000) + "秒待っても応答がありませんでした。" : String(e.message) };
+    return {
+      model, thinking, ms: Date.now() - t,
+      error: e.name === "AbortError" ? (ms / 1000) + "秒待っても応答がありませんでした。" : String(e.message)
+    };
   } finally {
     clearTimeout(tm);
   }
@@ -60,26 +67,29 @@ function readBody(req, ms) {
 }
 
 async function getBody(req) {
-  // Vercelがすでに解析した本文（Buffer）があればそれを使い、なければストリームから読む
   if (Buffer.isBuffer(req.body) && req.body.length) return req.body;
-  return readBody(req, 8000);
+  return readBody(req, 10000);
 }
 
 module.exports = async (req, res) => {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return res.status(500).json({ error: "サーバーに GEMINI_API_KEY が設定されていません。" });
 
-  // 切り分け用：
-  //   /api/diagnose?test=all …… 複数のモデル・設定を同時に試して、結果を一覧で返す
-  //   /api/diagnose?test=1&model=gemini-2.5-flash&nothink=1 …… 1つだけ試す
+  // 切り分け用テストエンドポイント
   if (req.method === "GET" && req.query.test) {
     if (req.query.test === "all") {
-      const list = [[MODEL, true], [MODEL, false], ["gemini-3.7-flash", false], ["gemini-2.5-flash", false]];
+      const list = [
+        [MODEL, "low"],
+        [MODEL, "zero"],
+        [MODEL, null],
+        ["gemini-3-flash-preview", "low"],
+        ["gemini-2.0-flash", null]
+      ];
       return res.status(200).json(await Promise.all(list.map(([m, th]) => probe(key, m, th, 55000))));
     }
     const m = String(req.query.model || MODEL);
     if (!/^gemini-[a-z0-9.\-]{1,40}$/.test(m)) return res.status(400).json({ error: "モデル名が正しくありません。" });
-    return res.status(200).json(await probe(key, m, !req.query.nothink, 25000));
+    return res.status(200).json(await probe(key, m, req.query.nothink ? null : "low", 55000));
   }
 
   if (req.method !== "POST") return res.status(405).json({ error: "POSTで呼び出してください。" });
@@ -93,10 +103,9 @@ module.exports = async (req, res) => {
   const t0 = Date.now();
   let size = 0;
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), 52000);
+  const timer = setTimeout(() => ac.abort(), 55000);
 
   try {
-    // 本文は application/octet-stream の生データ（動画そのもの）として届く
     console.log("diagnose: start, content-length=" + req.headers["content-length"] + ", body is buffer=" + Buffer.isBuffer(req.body));
     const buf = await getBody(req);
     if (!buf.length) return res.status(400).json({ error: "動画データが空です。" });
@@ -116,8 +125,10 @@ module.exports = async (req, res) => {
             { text: buildPrompt(memo) }
           ]
         }],
-        // 無料プランの関数は最長60秒のため、思考を軽め（low）にして時間内に返します
-        generationConfig: { maxOutputTokens: 3000, thinkingConfig: { thinkingLevel: "low" } }
+        generationConfig: {
+          maxOutputTokens: 3000,
+          thinkingConfig: { thinkingLevel: "LOW" }
+        }
       })
     });
     const data = await r.json().catch(() => ({}));
