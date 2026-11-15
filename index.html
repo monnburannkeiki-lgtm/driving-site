@@ -70,6 +70,7 @@ button.go:disabled{opacity:.55;cursor:not-allowed}
 #result p{margin:0 0 10px}
 #result ul{margin:0 0 10px;padding-left:1.3em}
 
+progress{width:100%;height:12px;display:none;accent-color:var(--amber)}
 footer{background:#1C2126;color:#AEB7BD;padding:32px 0;font-size:14px}
 
 @media (max-width:720px){
@@ -155,7 +156,7 @@ footer{background:#1C2126;color:#AEB7BD;padding:32px 0;font-size:14px}
       <div>
         <label for="videoFile">運転動画</label>
         <input id="videoFile" type="file" accept="video/*">
-        <p class="hint">100MBまでの動画を選べます。数分以内の動画がおすすめです。動画はあなたのブラウザからGoogleのGeminiへ直接送られ、約48時間後に自動で削除されます。他人の顔やナンバーが映る動画の扱いにはご注意ください。</p>
+        <p class="hint">動画はあなたのブラウザの中で自動的に小さく圧縮（3.5MB以下・音声なし・最大60秒分）されてから送られます。圧縮には動画の長さと同じくらいの時間がかかり、その間はこのタブを開いたままにしてください。長い動画は最初の60秒だけを診断します。他人の顔やナンバーが映る動画の扱いにはご注意ください。</p>
       </div>
       <video id="preview" controls playsinline></video>
       <div>
@@ -163,6 +164,7 @@ footer{background:#1C2126;color:#AEB7BD;padding:32px 0;font-size:14px}
         <textarea id="memo" placeholder="例：初心者です／狭い道が苦手／右折時の動きを見てほしい"></textarea>
       </div>
       <button class="go" id="runBtn" type="button">診断する</button>
+      <progress id="bar" max="100" value="0" aria-label="圧縮の進み具合"></progress>
       <div id="status" role="status" aria-live="polite"></div>
       <div id="result" aria-live="polite"></div>
     </div>
@@ -178,9 +180,10 @@ footer{background:#1C2126;color:#AEB7BD;padding:32px 0;font-size:14px}
 (function () {
   const $ = (id) => document.getElementById(id);
   const fileEl = $("videoFile"), memoEl = $("memo"), btn = $("runBtn");
-  const statusEl = $("status"), resultEl = $("result"), preview = $("preview");
-  const MAX_MB = 100;
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const statusEl = $("status"), resultEl = $("result"), preview = $("preview"), bar = $("bar");
+
+  const TARGET = 3.5 * 1024 * 1024; // 送信する動画の上限（3.5MB）
+  const MAX_SEC = 60;               // 診断に使う最大の長さ（秒）
 
   fileEl.addEventListener("change", () => {
     const f = fileEl.files[0];
@@ -193,54 +196,115 @@ footer{background:#1C2126;color:#AEB7BD;padding:32px 0;font-size:14px}
     statusEl.textContent = msg;
     statusEl.className = isErr ? "err" : "";
   }
+  function setBar(p) { // p: 0〜1。null で非表示
+    bar.style.display = p == null ? "none" : "block";
+    if (p != null) bar.value = Math.round(p * 100);
+  }
 
-  // サーバー（Vercel Functions）を呼び出す
+  // ---------- 動画の圧縮（Canvas + MediaRecorder） ----------
+  function pickMime() {
+    const list = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"];
+    return list.find((t) => MediaRecorder.isTypeSupported(t)) || "";
+  }
+
+  function loadVideo(file) {
+    return new Promise((resolve, reject) => {
+      const v = document.createElement("video");
+      v.muted = true; v.playsInline = true; v.preload = "auto";
+      v.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none";
+      document.body.appendChild(v);
+      v.onloadedmetadata = () => resolve(v);
+      v.onerror = () => { v.remove(); reject(new Error("動画を読み込めませんでした。mp4形式などでお試しください。")); };
+      v.src = URL.createObjectURL(file);
+    });
+  }
+
+  // 動画を最初から最後まで再生しながら、小さなCanvasに描いて録画し直す
+  function recordOnce(v, dur, bits, height, onProgress) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const h = Math.min(height, v.videoHeight) & ~1;
+        const w = Math.round((v.videoWidth * h) / v.videoHeight) & ~1;
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+
+        const mime = pickMime();
+        const opts = { videoBitsPerSecond: bits };
+        if (mime) opts.mimeType = mime;
+        const rec = new MediaRecorder(canvas.captureStream(15), opts);
+
+        const chunks = [];
+        let stopped = false;
+        rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+        rec.onerror = () => reject(new Error("動画の圧縮に失敗しました。"));
+        rec.onstop = () => resolve(new Blob(chunks, { type: (rec.mimeType || mime || "video/webm").split(";")[0] }));
+
+        const finish = () => {
+          if (stopped) return;
+          stopped = true;
+          v.pause();
+          if (rec.state !== "inactive") rec.stop();
+        };
+        const next = () => ("requestVideoFrameCallback" in v ? v.requestVideoFrameCallback(draw) : requestAnimationFrame(draw));
+        const draw = () => {
+          if (stopped) return;
+          ctx.drawImage(v, 0, 0, w, h);
+          onProgress(Math.min(1, v.currentTime / dur));
+          if (v.ended || v.currentTime >= dur) return finish();
+          next();
+        };
+
+        v.onended = finish;
+        await new Promise((r) => { if (v.currentTime === 0) return r(); v.onseeked = () => r(); v.currentTime = 0; });
+        rec.start(1000);
+        await v.play();
+        next();
+      } catch (e) {
+        reject(new Error("動画の圧縮を始められませんでした。ブラウザを最新版にしてお試しください。"));
+      }
+    });
+  }
+
+  // 3.5MB以下になるまで、ビットレートと解像度を下げて最大3回やり直す
+  async function compress(file) {
+    if (!window.MediaRecorder || !HTMLCanvasElement.prototype.captureStream) {
+      throw new Error("お使いのブラウザは動画の圧縮に対応していません。Chrome・Edge・Safariの最新版でお試しください。");
+    }
+    setStatus("動画を読み込んでいます…");
+    const v = await loadVideo(file);
+    try {
+      if (!isFinite(v.duration) || v.duration <= 0) throw new Error("動画の長さを取得できませんでした。mp4形式でお試しください。");
+      const dur = Math.min(v.duration, MAX_SEC);
+
+      // すでに小さいmp4 / webmは、そのまま送る
+      if (file.size <= TARGET && v.duration <= MAX_SEC && /^video\/(mp4|webm)$/.test(file.type)) return file;
+
+      let bits = Math.max(80000, Math.floor((TARGET * 8 * 0.7) / dur));
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const height = bits >= 900000 ? 480 : bits >= 450000 ? 360 : 240;
+        const note = attempt > 1 ? "（やり直し " + attempt + "回目）" : "";
+        const blob = await recordOnce(v, dur, bits, height, (p) => {
+          setStatus("動画を圧縮しています" + note + "… " + Math.round(p * 100) + "%（このタブを開いたままにしてください）");
+          setBar(p);
+        });
+        if (blob.size <= TARGET) return blob;
+        bits = Math.max(60000, Math.floor((bits * TARGET * 0.8) / blob.size));
+      }
+      throw new Error("3.5MB以下に圧縮できませんでした。もっと短い動画でお試しください。");
+    } finally {
+      URL.revokeObjectURL(v.src);
+      v.remove();
+    }
+  }
+
+  // ---------- サーバー（Vercel Functions）の呼び出し ----------
   async function api(url, opts) {
     const res = await fetch(url, opts);
     let data = {};
     try { data = await res.json(); } catch (e) {}
     if (!res.ok) throw new Error(data.error || "サーバーエラー（" + res.status + "）");
     return data;
-  }
-
-  // ブラウザからGoogleへ直接アップロード（Resumable Upload を1回で完了させる）
-  function putToGoogle(url, file, onProgress) {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", url);
-      xhr.setRequestHeader("X-Goog-Upload-Offset", "0");
-      xhr.setRequestHeader("X-Goog-Upload-Command", "upload, finalize");
-      xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100)); };
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try { resolve(JSON.parse(xhr.responseText).file); }
-          catch (e) { reject(new Error("アップロード結果を読み取れませんでした。")); }
-        } else {
-          reject(new Error("Googleへのアップロードに失敗しました（" + xhr.status + "）"));
-        }
-      };
-      xhr.onerror = () => reject(new Error("Googleへ直接アップロードできませんでした。通信状況を確認してください。"));
-      xhr.send(file);
-    });
-  }
-
-  async function uploadVideo(file, mime) {
-    setStatus("アップロードの準備をしています…");
-    // サーバーがAPIキーでアップロード枠を作り、そのURLだけを返す
-    const s = await api("/api/upload?action=start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: file.name, size: file.size, mime: mime })
-    });
-    let info = await putToGoogle(s.uploadUrl, file, (pct) => setStatus("動画をアップロードしています… " + pct + "%"));
-
-    setStatus("Geminiが動画を処理しています…");
-    for (let i = 0; i < 40 && info.state === "PROCESSING"; i++) {
-      await sleep(3000);
-      info = await api("/api/upload?action=status&name=" + encodeURIComponent(info.name));
-    }
-    if (info.state !== "ACTIVE") throw new Error("動画の処理が完了しませんでした。短い動画でお試しください。");
-    return info;
   }
 
   const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -267,21 +331,25 @@ footer{background:#1C2126;color:#AEB7BD;padding:32px 0;font-size:14px}
     const file = fileEl.files[0];
     resultEl.style.display = "none";
     if (!file) { setStatus("診断する動画を選んでください。", true); fileEl.focus(); return; }
-    if (file.size > MAX_MB * 1024 * 1024) { setStatus("動画は" + MAX_MB + "MB以下にしてください。", true); return; }
 
     btn.disabled = true;
     try {
-      const mime = file.type || "video/mp4";
-      const info = await uploadVideo(file, mime);
+      const blob = await compress(file);
+      setBar(null);
       setStatus("AIが運転を診断しています。最大1分ほどかかります…");
       const data = await api("/api/diagnose", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileUri: info.uri, mime: info.mimeType || mime, memo: memoEl.value.trim() })
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "x-video-mime": blob.type || "video/mp4",
+          "x-memo": encodeURIComponent(memoEl.value.trim().slice(0, 300))
+        },
+        body: blob
       });
       render(data.text);
-      setStatus("診断が完了しました。");
+      setStatus("診断が完了しました。（送信した動画：" + (blob.size / 1048576).toFixed(1) + "MB）");
     } catch (e) {
+      setBar(null);
       setStatus(e.message || "エラーが発生しました。", true);
     } finally {
       btn.disabled = false;
