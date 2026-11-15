@@ -155,7 +155,7 @@ footer{background:#1C2126;color:#AEB7BD;padding:32px 0;font-size:14px}
       <div>
         <label for="videoFile">運転動画</label>
         <input id="videoFile" type="file" accept="video/*">
-        <p class="hint">100MBまでの動画を選べます。数分以内の動画がおすすめです。動画は診断のためにGoogleのGeminiに送られ、一定時間後に自動で削除されます。他人の顔やナンバーが映る動画の扱いにはご注意ください。</p>
+        <p class="hint">100MBまでの動画を選べます。数分以内の動画がおすすめです。動画はあなたのブラウザからGoogleのGeminiへ直接送られ、約48時間後に自動で削除されます。他人の顔やナンバーが映る動画の扱いにはご注意ください。</p>
       </div>
       <video id="preview" controls playsinline></video>
       <div>
@@ -203,34 +203,36 @@ footer{background:#1C2126;color:#AEB7BD;padding:32px 0;font-size:14px}
     return data;
   }
 
-  // 動画を小さな塊に分けてアップロードし、Geminiの処理完了まで待つ
+  // ブラウザからGoogleへ直接アップロード（Resumable Upload を1回で完了させる）
+  function putToGoogle(url, file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", url);
+      xhr.setRequestHeader("X-Goog-Upload-Offset", "0");
+      xhr.setRequestHeader("X-Goog-Upload-Command", "upload, finalize");
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100)); };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText).file); }
+          catch (e) { reject(new Error("アップロード結果を読み取れませんでした。")); }
+        } else {
+          reject(new Error("Googleへのアップロードに失敗しました（" + xhr.status + "）"));
+        }
+      };
+      xhr.onerror = () => reject(new Error("Googleへ直接アップロードできませんでした。通信状況を確認してください。"));
+      xhr.send(file);
+    });
+  }
+
   async function uploadVideo(file, mime) {
+    setStatus("アップロードの準備をしています…");
+    // サーバーがAPIキーでアップロード枠を作り、そのURLだけを返す
     const s = await api("/api/upload?action=start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: file.name, size: file.size, mime: mime })
     });
-    const unit = Math.floor(3900000 / s.granularity) * s.granularity; // 関数の本文上限（4.5MB）以下
-    if (unit <= 0) throw new Error("この環境ではアップロード方式が使えません。");
-
-    let offset = 0, info = null;
-    while (offset < file.size) {
-      const end = Math.min(offset + unit, file.size);
-      const final = end >= file.size;
-      setStatus("動画をアップロードしています… " + Math.round((end / file.size) * 100) + "%");
-      const r = await api("/api/upload?action=chunk", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/octet-stream",
-          "x-upload-url": encodeURIComponent(s.uploadUrl),
-          "x-offset": String(offset),
-          "x-final": final ? "1" : "0"
-        },
-        body: file.slice(offset, end)
-      });
-      if (final) info = r.file;
-      offset = end;
-    }
+    let info = await putToGoogle(s.uploadUrl, file, (pct) => setStatus("動画をアップロードしています… " + pct + "%"));
 
     setStatus("Geminiが動画を処理しています…");
     for (let i = 0; i < 40 && info.state === "PROCESSING"; i++) {
