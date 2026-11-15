@@ -38,9 +38,40 @@ async function getBody(req) {
 }
 
 module.exports = async (req, res) => {
-  if (req.method !== "POST") return res.status(405).json({ error: "POSTで呼び出してください。" });
   const key = process.env.GEMINI_API_KEY;
   if (!key) return res.status(500).json({ error: "サーバーに GEMINI_API_KEY が設定されていません。" });
+
+  // 切り分け用：/api/diagnose?test=1 を開くと、動画なしの短い質問でモデルの応答時間を測る
+  //   ?model=gemini-2.5-flash で別モデルを試せる／&nothink=1 で思考の設定を外して試せる
+  if (req.method === "GET" && req.query.test) {
+    const m = String(req.query.model || MODEL);
+    if (!/^gemini-[a-z0-9.\-]{1,40}$/.test(m)) return res.status(400).json({ error: "モデル名が正しくありません。" });
+    const cfg = { maxOutputTokens: 200 };
+    if (!req.query.nothink) cfg.thinkingConfig = { thinkingLevel: "low" };
+    const t = Date.now();
+    const ac2 = new AbortController();
+    const tm = setTimeout(() => ac2.abort(), 25000);
+    try {
+      const r = await fetch(BASE + "/v1beta/models/" + m + ":generateContent", {
+        method: "POST",
+        signal: ac2.signal,
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "「OK」とだけ返してください。" }] }], generationConfig: cfg })
+      });
+      const d = await r.json().catch(() => ({}));
+      return res.status(200).json({
+        model: m, status: r.status, ms: Date.now() - t,
+        text: (d.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join(""),
+        error: d.error?.message || null
+      });
+    } catch (e) {
+      return res.status(200).json({ model: m, ms: Date.now() - t, error: e.name === "AbortError" ? "25秒待っても応答がありませんでした。" : String(e.message) });
+    } finally {
+      clearTimeout(tm);
+    }
+  }
+
+  if (req.method !== "POST") return res.status(405).json({ error: "POSTで呼び出してください。" });
 
   const mime = String(req.headers["x-video-mime"] || "").split(";")[0].trim().toLowerCase();
   if (!ALLOWED_MIME.includes(mime)) return res.status(400).json({ error: "動画の形式（mp4 / webm）が正しくありません。" });
@@ -49,6 +80,7 @@ module.exports = async (req, res) => {
   try { memo = decodeURIComponent(String(req.headers["x-memo"] || "")).slice(0, 300); } catch (e) {}
 
   const t0 = Date.now();
+  let size = 0;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), 52000);
 
@@ -57,6 +89,7 @@ module.exports = async (req, res) => {
     console.log("diagnose: start, content-length=" + req.headers["content-length"] + ", body is buffer=" + Buffer.isBuffer(req.body));
     const buf = await getBody(req);
     if (!buf.length) return res.status(400).json({ error: "動画データが空です。" });
+    size = buf.length;
     if (buf.length > MAX_BYTES) return res.status(413).json({ error: "動画のサイズが大きすぎます。もう一度圧縮してください。" });
 
     console.log("diagnose: received " + buf.length + " bytes, mime=" + mime + ", model=" + MODEL + ", " + (Date.now() - t0) + "ms");
@@ -91,7 +124,7 @@ module.exports = async (req, res) => {
       return res.status(408).json({ error: "動画データを受信できませんでした。もう一度お試しください。" });
     }
     if (e && e.name === "AbortError") {
-      return res.status(504).json({ error: "AIの応答が時間内に返りませんでした。もっと短い動画で、もう一度お試しください。" });
+      return res.status(504).json({ error: "AIの応答が時間内に返りませんでした（モデル：" + MODEL + "、動画：" + mime + " " + (size / 1048576).toFixed(1) + "MB）。もう一度お試しください。" });
     }
     return res.status(500).json({ error: "サーバーでエラーが発生しました。" });
   } finally {
